@@ -1,45 +1,51 @@
+import random
 from collections.abc import Mapping
 import numpy as np
+import torch
 from dataclasses import dataclass
-from typing import Any, Dict, List, NewType, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.tokenization_utils_base import BatchEncoding
 from transformers.data.data_collator import (
     DataCollatorMixin, 
     _torch_collate_batch, tolist, _tf_collate_batch, _numpy_collate_batch
 )
+from utils import random_spans_noise_mask
+
 
 @dataclass
 class DataCollatorForUL2(DataCollatorMixin):
     """
+
     Data collator used for UL2
-    - R-Denoiser (μ=3,r=0.15,n)∪ (μ=8,r=0.15,n)
-        The regular denoising is the standard span corruption introduced in Raffel et al. (2019) that uses a range
-        of 2 to 5 tokens as the span length, which masks about 15% of input tokens
-    - S-Denoiser (μ=L/4,r=0.25,1)
-        A specific case of denoising where we observe a strict sequential order when framing the inputs-to-targets
-        task, i.e., prefix language modeling
-    - X-Denoiser (μ = 3,r = 0.5,n)∪(μ = 8,r = 0.5,n)∪(μ = 64,r =0.15,n)∪ (μ=64,r=0.5,n)
-        An extreme version of denoising where the model must recover a large part of the input, given a small to
-        moderate part of it. This simulates a situation where a model needs to generate long target from a memory
-        with relatively limited information. To do so, we opt to include examples with aggressive denoising where
-        approximately 50% of the input sequence is masked
+
     """
     tokenizer: PreTrainedTokenizerBase
-    mlm: bool = True
-    mlm_probability: float = 0.15
+    r_denoising: bool = True
+    r_probability: float = 0.25
+    r_denoising_config: Tuple[Tuple] = ((3, 0.15),(8, 0.15))
+    s_denoising: bool = True
+    s_probability: float = 0.5
+    x_denoising: bool = True
+    x_probability: float = 0.25
+    x_denoising_config: Tuple[Tuple] = ((32, 0.5), (64, 0.15))
     pad_to_multiple_of: Optional[int] = None
     tf_experimental_compile: bool = False
     return_tensors: str = "pt"
-    def __post_init__(self):
-        if self.mlm and self.tokenizer.mask_token is None:
-            raise ValueError(
-                "This tokenizer does not have a mask token which is necessary for masked language modeling. "
-                "You should pass `mlm=False` to train on causal language modeling instead."
-            )
-        if self.tf_experimental_compile:
-            import tensorflow as tf
+    label_pad_token_id: int = -100
 
-            self.tf_mask_tokens = tf.function(self.tf_mask_tokens, jit_compile=True)
+    def __post_init__(self):
+        self.total_task = [0, 1, 2]
+        task_prob = []
+        task_prob.append(self.r_probability if self.r_denoising else 0.0)
+        task_prob.append(self.s_probability if self.s_denoising else 0.0)
+        task_prob.append(self.x_probability if self.x_denoising else 0.0)
+        self.task_prob = task_prob
+        self.pad_token_id = int(self.tokenizer.pad_token_id)
+        self.decoder_start_token_id = self.tokenizer.bos_token_id
+
+    def assign_task_type(self, batch_size: int):
+        return random.choices(self.total_task,weights=self.task_prob, k=batch_size)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
         # Handle dict or lists with proper padding and conversion to tensor.
@@ -52,105 +58,162 @@ class DataCollatorForUL2(DataCollatorMixin):
 
         # If special token mask has been preprocessed, pop it from the dict.
         special_tokens_mask = batch.pop("special_tokens_mask", None)
-        if self.mlm:
-            batch["input_ids"], batch["labels"] = self.torch_mask_tokens(
-                batch["input_ids"], special_tokens_mask=special_tokens_mask
-            )
-        else:
-            labels = batch["input_ids"].clone()
-            if self.tokenizer.pad_token_id is not None:
-                labels[labels == self.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
+        task_ids = self.assign_task_type(len(batch["input_ids"]))
+        task_type = torch.tensor(task_ids, dtype=torch.int32)
+
         return batch
 
-    def torch_mask_tokens(self, inputs: Any, special_tokens_mask: Optional[Any] = None) -> Tuple[Any, Any]:
-        """
-        Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
-        """
-        import torch
-
-        labels = inputs.clone()
-        # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
-        probability_matrix = torch.full(labels.shape, self.mlm_probability)
-        if special_tokens_mask is None:
-            special_tokens_mask = [
-                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
-            ]
-            special_tokens_mask = torch.tensor(special_tokens_mask, dtype=torch.bool)
-        else:
-            special_tokens_mask = special_tokens_mask.bool()
-
-        probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
-        masked_indices = torch.bernoulli(probability_matrix).bool()
-        labels[~masked_indices] = -100  # We only compute loss on masked tokens
-
-        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
-        inputs[indices_replaced] = self.tokenizer.convert_tokens_to_ids(self.tokenizer.mask_token)
-
-        # 10% of the time, we replace masked input tokens with random word
-        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-        random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=torch.long)
-        inputs[indices_random] = random_words[indices_random]
-
-        # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-        return inputs, labels
 
     def numpy_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
-        # Handle dict or lists with proper padding and conversion to tensor.
+        task_ids = self.assign_task_type(len(examples))
+        task_type = np.array(task_ids)
+        lengths = np.array([ len(e['input_ids']) for e in examples ], dtype=np.int32)
         if isinstance(examples[0], Mapping):
-            batch = self.tokenizer.pad(examples, return_tensors="np", pad_to_multiple_of=self.pad_to_multiple_of)
+            batch = self.tokenizer.pad(examples, return_tensors="np", 
+                pad_to_multiple_of=self.pad_to_multiple_of)
         else:
             batch = {
-                "input_ids": _numpy_collate_batch(examples, self.tokenizer, pad_to_multiple_of=self.pad_to_multiple_of)
+                "input_ids": _torch_collate_batch(examples, self.tokenizer, 
+                    pad_to_multiple_of=self.pad_to_multiple_of)
             }
+        new_batch = {
+            "input_ids": np.zeros(batch['input_ids'].shape, dtype=np.int32), 
+            "labels": np.zeros(batch['input_ids'].shape, dtype=np.int32)
+        }
 
-        # If special token mask has been preprocessed, pop it from the dict.
-        special_tokens_mask = batch.pop("special_tokens_mask", None)
-        if self.mlm:
-            batch["input_ids"], batch["labels"] = self.numpy_mask_tokens(
-                batch["input_ids"], special_tokens_mask=special_tokens_mask
-            )
-        else:
-            labels = np.copy(batch["input_ids"])
-            if self.tokenizer.pad_token_id is not None:
-                labels[labels == self.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
+        _, expanded_length = batch['input_ids'].shape
+        input_ids = batch["input_ids"]
+        r_denoising_idx = task_type == 0
+        if r_denoising_idx.any():
+            mask_indices = None
+            sub_input_ids = input_ids[r_denoising_idx]
+            for (mean_span, noise) in self.r_denoising_config:
+                _mask_indices = np.array([
+                    random_spans_noise_mask(expanded_length, mean_span, noise) for _ in range(len(sub_input_ids))
+                ])
+                if mask_indices is None:
+                    mask_indices = _mask_indices
+                else:
+                    mask_indices = mask_indices | _mask_indices
+            mask_indices = mask_indices & (sub_input_ids != self.pad_token_id)
+            labels_mask = ~mask_indices & (sub_input_ids != self.pad_token_id)
+
+            input_ids_sentinel = self.create_sentinel_ids(mask_indices.astype(np.int16))
+            labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
+
+            sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
+            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
+            new_batch['input_ids'][r_denoising_idx] = sub_input_ids
+            new_batch['labels'][r_denoising_idx] = _labels
+
+        s_denoising_idx = task_type == 1        
+        if s_denoising_idx.any():
+            sub_input_ids = input_ids[s_denoising_idx]
+            _labels = []
+            _input_ids = []
+            for input_id, len_ in zip(sub_input_ids, lengths[s_denoising_idx]):
+                split = max(len_//2, 2)
+                diff = expanded_length - split
+                _input_ids.append(np.pad(input_id[:split], (0, diff), 'constant'))
+                _labels.append(np.pad(input_id[split:], (0, split), 'constant'))
+
+            new_batch['input_ids'][s_denoising_idx] = np.array(_input_ids)
+            new_batch['labels'][s_denoising_idx] = np.array(_labels)
+
+
+        x_denoising_idx = task_type == 2
+        if x_denoising_idx.any():
+            mask_indices = None
+            sub_input_ids = input_ids[x_denoising_idx]
+            for (mean_span, noise) in self.x_denoising_config:
+                _mask_indices = np.array([
+                    random_spans_noise_mask(expanded_length, mean_span, noise) for _ in range(len(sub_input_ids))
+                ])
+                if mask_indices is None:
+                    mask_indices = _mask_indices
+                else:
+                    mask_indices = mask_indices | _mask_indices
+            mask_indices = mask_indices & (sub_input_ids != self.pad_token_id)
+            labels_mask = ~mask_indices
+
+            input_ids_sentinel = self.create_sentinel_ids(mask_indices.astype(np.int16))
+            labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
+
+            sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
+            labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
+            new_batch['input_ids'][x_denoising_idx] = sub_input_ids
+            new_batch['labels'][x_denoising_idx] = labels
+
+        return self.np_prepare_decoder_inputs_from_labels(new_batch)
+
+
+
+    def filter_input_ids(self, input_ids, sentinel_ids):
+        """
+        Puts sentinel mask on `input_ids` and fuse consecutive mask tokens into a single mask token by deleting.
+        This will reduce the sequence length from `expanded_inputs_length` to `input_length`.
+        """
+        input_ids_full = np.where(sentinel_ids != 0, sentinel_ids, input_ids)
+        # input_ids tokens and sentinel tokens are >= 0, tokens < 0 are
+        # masked tokens coming after sentinel tokens and should be removed
+        input_ids = []
+        for row in input_ids_full:
+            collapsed_id = row[row >= 0]
+            diff = len(row) - len(collapsed_id)
+            collapsed_id = np.pad(collapsed_id, (0, diff), 'constant')
+            input_ids.append(collapsed_id)
+        return np.array(input_ids)
+
+    def create_sentinel_ids(self, mask_indices):
+        """
+        Sentinel ids creation given the indices that should be masked.
+        The start indices of each mask are replaced by the sentinel ids in increasing
+        order. Consecutive mask indices to be deleted are replaced with `-1`.
+        """
+        start_indices = mask_indices - np.roll(mask_indices, 1, axis=-1) * mask_indices
+        start_indices[:, 0] = mask_indices[:, 0]
+
+        sentinel_ids = np.where(
+            start_indices != 0, np.cumsum(start_indices, axis=-1), start_indices
+        )
+        sentinel_ids = np.where(
+            sentinel_ids != 0, (len(self.tokenizer) - sentinel_ids), 0
+        )
+        sentinel_ids -= mask_indices - start_indices
+
+        return sentinel_ids
+
+
+    def prepare_decoder_inputs_from_labels(self, batch):
+        # decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id.
+        # See T5 docs for more information
+        shifted_labels = batch["labels"].new_zeros(batch["labels"].shape)
+        shifted_labels[..., 1:] = batch["labels"][..., :-1].clone()
+        shifted_labels[..., 0] = self.decoder_start_token_id  # decoder_start_token_id
+
+        batch["decoder_input_ids"] = torch.masked_fill(
+            shifted_labels, shifted_labels == self.label_pad_token_id, self.pad_token_id
+        )
+        batch["decoder_attention_mask"] = torch.where(
+            shifted_labels == self.label_pad_token_id,
+            0,
+            torch.ones_like(shifted_labels),
+        )
         return batch
 
-    def numpy_mask_tokens(self, inputs: Any, special_tokens_mask: Optional[Any] = None) -> Tuple[Any, Any]:
-        """
-        Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
-        """
-        labels = np.copy(inputs)
-        # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
-        probability_matrix = np.full(labels.shape, self.mlm_probability)
-        if special_tokens_mask is None:
-            special_tokens_mask = [
-                self.tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
-            ]
-            special_tokens_mask = np.array(special_tokens_mask, dtype=bool)
-        else:
-            special_tokens_mask = special_tokens_mask.astype(bool)
+    def np_prepare_decoder_inputs_from_labels(self, batch):
+        shifted_labels = np.zeros(batch["labels"].shape)
+        shifted_labels[..., 1:] = batch["labels"][..., :-1].copy()
+        shifted_labels[..., 0] = self.decoder_start_token_id
 
-        probability_matrix[special_tokens_mask] = 0
-        # Numpy doesn't have bernoulli, so we use a binomial with 1 trial
-        masked_indices = np.random.binomial(1, probability_matrix, size=probability_matrix.shape).astype(bool)
-        labels[~masked_indices] = -100  # We only compute loss on masked tokens
-
-        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-        indices_replaced = np.random.binomial(1, 0.8, size=labels.shape).astype(bool) & masked_indices
-        inputs[indices_replaced] = self.tokenizer.mask_token_id
-
-        # 10% of the time, we replace masked input tokens with random word
-        # indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-        indices_random = (
-            np.random.binomial(1, 0.5, size=labels.shape).astype(bool) & masked_indices & ~indices_replaced
+        batch["decoder_input_ids"] = np.where(
+            shifted_labels == self.label_pad_token_id,
+            self.pad_token_id,
+            shifted_labels
         )
-        random_words = np.random.randint(
-            low=0, high=len(self.tokenizer), size=np.count_nonzero(indices_random), dtype=np.int64
+        batch["decoder_attention_mask"] = np.where(
+            shifted_labels == self.label_pad_token_id,
+            0,
+            np.ones_like(shifted_labels)
         )
-        inputs[indices_random] = random_words
-
-        # The rest of the time (10% of the time) we keep the masked input tokens unchanged
-        return inputs, labels
+        return batch
