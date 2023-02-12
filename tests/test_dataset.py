@@ -1,8 +1,8 @@
 import json
 import io
 import zstandard as zstd
+from tqdm import tqdm
 from transformers import AutoTokenizer
-from utils import random_spans_noise_mask
 from collate_fn import DataCollatorForUL2
 from torch.utils.data import IterableDataset, DataLoader
 
@@ -37,8 +37,8 @@ if __name__ == "__main__":
     # mimic result from multiple dataset runs
     collate_fn = DataCollatorForUL2(tokenizer)
     dataloader = DataLoader(dataset, batch_size=128, collate_fn=collate_fn)
-    for batch in dataloader:
-        print(batch)
+    for batch in tqdm(dataloader):
+        batch
     # batch = [  ]
     # np_batch = collate_fn(batch, return_tensors='pt')
     # print(np_batch)
