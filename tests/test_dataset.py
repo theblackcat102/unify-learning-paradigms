@@ -30,13 +30,14 @@ class ZstDataset(IterableDataset):
 
 
 if __name__ == "__main__":
+    # download test.jsonl.zst from the-pile website
 
     tokenizer = AutoTokenizer.from_pretrained("bigscience/mt0-small")
     tokenizer.bos_token_id = 0
     dataset = ZstDataset('test.jsonl.zst', tokenizer)
     # mimic result from multiple dataset runs
     collate_fn = DataCollatorForUL2(tokenizer)
-    dataloader = DataLoader(dataset, batch_size=128, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=256, collate_fn=collate_fn)
     for batch in tqdm(dataloader):
         batch
     # batch = [  ]

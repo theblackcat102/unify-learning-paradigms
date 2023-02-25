@@ -6,10 +6,9 @@ from torch.nn import functional as F
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.tokenization_utils_base import BatchEncoding
 from transformers.data.data_collator import (
     DataCollatorMixin, 
-    _torch_collate_batch, tolist, _tf_collate_batch, _numpy_collate_batch
+    _torch_collate_batch,
 )
 from utils import random_spans_noise_mask
 
@@ -24,12 +23,12 @@ class DataCollatorForUL2(DataCollatorMixin):
     tokenizer: PreTrainedTokenizerBase
     r_denoising: bool = True
     r_probability: float = 0.25
-    r_denoising_config: Tuple[Tuple] = ((3, 0.15),(8, 0.15))
+    r_denoising_config: Tuple[Tuple] = ((3, 0.15),)
     s_denoising: bool = True
     s_probability: float = 0.5
     x_denoising: bool = True
     x_probability: float = 0.25
-    x_denoising_config: Tuple[Tuple] = ((32, 0.5), (64, 0.15))
+    x_denoising_config: Tuple[Tuple] = ((32, 0.5), (64, 0.5))
     pad_to_multiple_of: Optional[int] = None
     tf_experimental_compile: bool = False
     return_tensors: str = "pt"
@@ -46,6 +45,9 @@ class DataCollatorForUL2(DataCollatorMixin):
         self.decoder_start_token_id = self.tokenizer.bos_token_id
 
     def assign_task_type(self, batch_size: int):
+        '''
+            Randomly assign S,R,X to each sentence based on weighted prob
+        '''
         return random.choices(self.total_task,weights=self.task_prob, k=batch_size)
 
     def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -69,6 +71,7 @@ class DataCollatorForUL2(DataCollatorMixin):
 
         _, expanded_length = batch['input_ids'].shape
         input_ids = batch["input_ids"]
+
         r_denoising_idx = task_type == 0
         if r_denoising_idx.any():
             mask_indices = None
@@ -131,8 +134,6 @@ class DataCollatorForUL2(DataCollatorMixin):
             new_batch['labels'][x_denoising_idx] = labels
 
         return self.prepare_decoder_inputs_from_labels(new_batch)
-
-
 
 
     def numpy_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -217,8 +218,6 @@ class DataCollatorForUL2(DataCollatorMixin):
 
         return self.np_prepare_decoder_inputs_from_labels(new_batch)
 
-
-
     def filter_input_ids(self, input_ids, sentinel_ids, type='np'):
         """
         Puts sentinel mask on `input_ids` and fuse consecutive mask tokens into a single mask token by deleting.
@@ -260,7 +259,6 @@ class DataCollatorForUL2(DataCollatorMixin):
             return torch.from_numpy(sentinel_ids)
         return sentinel_ids
 
-
     def prepare_decoder_inputs_from_labels(self, batch):
         # decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id.
         # See T5 docs for more information
@@ -294,3 +292,4 @@ class DataCollatorForUL2(DataCollatorMixin):
             np.ones_like(shifted_labels)
         )
         return batch
+
