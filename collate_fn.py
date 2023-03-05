@@ -41,7 +41,7 @@ class DataCollatorForUL2(DataCollatorMixin):
         task_prob.append(self.s_probability if self.s_denoising else 0.0)
         task_prob.append(self.x_probability if self.x_denoising else 0.0)
         self.task_prob = task_prob
-        self.pad_token_id = int(self.tokenizer.pad_token_id)
+        self.pad_token_id = self.tokenizer.pad_token_id
         self.decoder_start_token_id = self.tokenizer.bos_token_id
 
     def assign_task_type(self, batch_size: int):
@@ -57,7 +57,7 @@ class DataCollatorForUL2(DataCollatorMixin):
         task_type = torch.tensor(task_ids)
         lengths = torch.tensor([ len(e['input_ids']) for e in examples ], dtype=torch.long)
         if isinstance(examples[0], Mapping):
-            batch = self.tokenizer.pad(examples, return_tensors="pt", 
+            batch = self.tokenizer.pad(examples, return_tensors="pt",
                 pad_to_multiple_of=self.pad_to_multiple_of)
         else:
             batch = {
@@ -71,7 +71,6 @@ class DataCollatorForUL2(DataCollatorMixin):
 
         _, expanded_length = batch['input_ids'].shape
         input_ids = batch["input_ids"]
-
         r_denoising_idx = task_type == 0
         if r_denoising_idx.any():
             mask_indices = None
@@ -96,7 +95,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             new_batch['input_ids'][r_denoising_idx] = sub_input_ids
             new_batch['labels'][r_denoising_idx] = _labels
 
-        s_denoising_idx = task_type == 1        
+        s_denoising_idx = task_type == 1
         if s_denoising_idx.any():
             sub_input_ids = input_ids[s_denoising_idx]
             _labels = []
@@ -105,8 +104,10 @@ class DataCollatorForUL2(DataCollatorMixin):
                 split = max(len_//2, 2)
                 diff = expanded_length - split
                 _input_ids.append(F.pad(input_id[:split], (0, diff), 'constant', self.pad_token_id))
-                _labels.append(F.pad(input_id[split:], (0, split), 'constant', self.pad_token_id))
-                _labels[-1][split] = self.tokenizer.eos_token_id
+                past_seq = input_id[split:]
+                if past_seq[-1] != self.tokenizer.eos_token_id:
+                    past_seq[-1] = self.tokenizer.eos_token_id
+                _labels.append(F.pad(past_seq, (0, split), 'constant', self.pad_token_id))
 
             new_batch['input_ids'][s_denoising_idx] = torch.stack(_input_ids)
             new_batch['labels'][s_denoising_idx] = torch.stack(_labels)
@@ -131,7 +132,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.to(torch.int16), 'pt')
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel, 'pt')
-            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt', insert_eos=True)
+            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt')
             new_batch['input_ids'][x_denoising_idx] = sub_input_ids
             new_batch['labels'][x_denoising_idx] = labels
 
@@ -176,7 +177,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
-            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel, insert_eos=True)
+            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
             new_batch['input_ids'][r_denoising_idx] = sub_input_ids
             new_batch['labels'][r_denoising_idx] = _labels
 
@@ -189,7 +190,10 @@ class DataCollatorForUL2(DataCollatorMixin):
                 split = max(len_//2, 2)
                 diff = expanded_length - split
                 _input_ids.append(np.pad(input_id[:split], (0, diff), 'constant'))
-                _labels.append(np.pad(input_id[split:], (0, split), 'constant'))
+                past_seq = input_id[split:]
+                if past_seq[-1] != self.tokenizer.eos_token_id:
+                    past_seq[-1] = self.tokenizer.eos_token_id
+                _labels.append(np.pad(past_seq, (0, split), 'constant'))
 
             new_batch['input_ids'][s_denoising_idx] = np.array(_input_ids)
             new_batch['labels'][s_denoising_idx] = np.array(_labels)
@@ -214,7 +218,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
-            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, insert_eos=True)
+            labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
             new_batch['input_ids'][x_denoising_idx] = sub_input_ids
             new_batch['labels'][x_denoising_idx] = labels
 
@@ -266,12 +270,15 @@ class DataCollatorForUL2(DataCollatorMixin):
     def prepare_decoder_inputs_from_labels(self, batch):
         # decoder_start_token_id has to be defined. In T5 it is usually set to the pad_token_id.
         # See T5 docs for more information
+        batch["labels"][ batch["labels"] == self.pad_token_id ] = self.label_pad_token_id
         shifted_labels = batch["labels"].new_zeros(batch["labels"].shape)
         shifted_labels[..., 1:] = batch["labels"][..., :-1].clone()
         shifted_labels[..., 0] = self.decoder_start_token_id  # decoder_start_token_id
 
         batch["decoder_input_ids"] = torch.masked_fill(
-            shifted_labels, shifted_labels == self.label_pad_token_id, self.pad_token_id
+            shifted_labels,
+            shifted_labels == self.label_pad_token_id,
+            self.pad_token_id
         )
         batch["decoder_attention_mask"] = torch.where(
             shifted_labels == self.label_pad_token_id,
@@ -281,6 +288,7 @@ class DataCollatorForUL2(DataCollatorMixin):
         return batch
 
     def np_prepare_decoder_inputs_from_labels(self, batch):
+        batch["labels"][ batch["labels"] == self.pad_token_id ] = self.label_pad_token_id
         shifted_labels = np.zeros(batch["labels"].shape)
         shifted_labels[..., 1:] = batch["labels"][..., :-1].copy()
         shifted_labels[..., 0] = self.decoder_start_token_id
