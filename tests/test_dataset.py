@@ -33,24 +33,17 @@ if __name__ == "__main__":
     # download test.jsonl.zst from the-pile website
 
     tokenizer = AutoTokenizer.from_pretrained("bigscience/mt0-small")
-    tokenizer.bos_token_id = 0
+    tokenizer.add_special_tokens({'bos_token': '<s>'})
     dataset = ZstDataset('test.jsonl.zst', tokenizer)
     # mimic result from multiple dataset runs
     collate_fn = DataCollatorForUL2(tokenizer)
     dataloader = DataLoader(dataset, batch_size=256, collate_fn=collate_fn)
+
+    # benchmark iteration speed
     for batch in tqdm(dataloader):
         batch
+
     # batch = [  ]
     # np_batch = collate_fn(batch, return_tensors='pt')
     # print(np_batch)
 
-    # t5_collate = DataCollatorForT5Pretraining(tokenizer)
-    # np_batch = t5_collate(tokenizer(test))
-
-    # for b in batch:
-    #     print(b['input_ids'])
-    #     if len(b['input_ids']) <= 3:
-    #         continue
-    #     print(b['input_ids'])
-    #     noise_ = random_spans_noise_mask(len(b['input_ids']), 3, 0.15)
-    #     print(noise_)

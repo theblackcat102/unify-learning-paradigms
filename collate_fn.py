@@ -76,6 +76,7 @@ class DataCollatorForUL2(DataCollatorMixin):
         if r_denoising_idx.any():
             mask_indices = None
             sub_input_ids = input_ids[r_denoising_idx]
+            # union of different denoising settings
             for (mean_span, noise) in self.r_denoising_config:
                 _mask_indices = torch.tensor([
                     random_spans_noise_mask(expanded_length, mean_span, noise) for _ in range(len(sub_input_ids))
@@ -91,7 +92,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.to(torch.int16), 'pt')
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel, 'pt')
-            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt')
+            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt', insert_eos=True)
             new_batch['input_ids'][r_denoising_idx] = sub_input_ids
             new_batch['labels'][r_denoising_idx] = _labels
 
@@ -105,6 +106,7 @@ class DataCollatorForUL2(DataCollatorMixin):
                 diff = expanded_length - split
                 _input_ids.append(F.pad(input_id[:split], (0, diff), 'constant', self.pad_token_id))
                 _labels.append(F.pad(input_id[split:], (0, split), 'constant', self.pad_token_id))
+                _labels[-1][split] = self.tokenizer.eos_token_id
 
             new_batch['input_ids'][s_denoising_idx] = torch.stack(_input_ids)
             new_batch['labels'][s_denoising_idx] = torch.stack(_labels)
@@ -129,7 +131,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.to(torch.int16), 'pt')
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel, 'pt')
-            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt')
+            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, 'pt', insert_eos=True)
             new_batch['input_ids'][x_denoising_idx] = sub_input_ids
             new_batch['labels'][x_denoising_idx] = labels
 
@@ -174,7 +176,7 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
-            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
+            _labels = self.filter_input_ids(sub_input_ids, labels_sentinel, insert_eos=True)
             new_batch['input_ids'][r_denoising_idx] = sub_input_ids
             new_batch['labels'][r_denoising_idx] = _labels
 
@@ -212,13 +214,13 @@ class DataCollatorForUL2(DataCollatorMixin):
             labels_sentinel = self.create_sentinel_ids(labels_mask.astype(np.int16))
 
             sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
-            labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
+            labels = self.filter_input_ids(sub_input_ids, labels_sentinel, insert_eos=True)
             new_batch['input_ids'][x_denoising_idx] = sub_input_ids
             new_batch['labels'][x_denoising_idx] = labels
 
         return self.np_prepare_decoder_inputs_from_labels(new_batch)
 
-    def filter_input_ids(self, input_ids, sentinel_ids, type='np'):
+    def filter_input_ids(self, input_ids, sentinel_ids, type='np', insert_eos=False):
         """
         Puts sentinel mask on `input_ids` and fuse consecutive mask tokens into a single mask token by deleting.
         This will reduce the sequence length from `expanded_inputs_length` to `input_length`.
@@ -231,6 +233,8 @@ class DataCollatorForUL2(DataCollatorMixin):
             collapsed_id = row[row >= 0]
             diff = len(row) - len(collapsed_id)
             collapsed_id = np.pad(collapsed_id, (0, diff), 'constant')
+            if insert_eos:
+                collapsed_id[diff] = self.tokenizer.eos_token_id
             input_ids.append(collapsed_id)
         if type == 'pt':
             return torch.from_numpy(np.array(input_ids))
