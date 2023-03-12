@@ -69,11 +69,11 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("bigscience/mt0-small")
     tokenizer.add_special_tokens({'bos_token': '<s>'})
     dataset = ZstDataset(list(glob.glob('/mnt/ssd/pythia/*.jsonl.zst')), tokenizer)
-    dataset = ZstDataset('/mnt/ssd/pythia_val/val.jsonl.zst', tokenizer, max_length=600)
+    # dataset = ZstDataset('/mnt/ssd/pythia_val/val.jsonl.zst', tokenizer, max_length=600)
     # mimic result from multiple dataset runs
     collate_fn = DataCollatorForUL2(tokenizer,
-                                r_probability=1.0, r_denoising=True,
-                                s_probability=0.0, s_denoising=False,
+                                r_probability=0.5, r_denoising=True,
+                                s_probability=0.5, s_denoising=False,
                                 x_denoising=False, x_probability=0.0)
     dataloader = DataLoader(dataset, batch_size=256, collate_fn=collate_fn, num_workers=13)
 

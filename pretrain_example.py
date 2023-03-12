@@ -11,22 +11,20 @@ from tests import utils
 if __name__ == "__main__":
     model_name = "theblackcat102/mt0-chat-large"
     model_saved_name = model_name.split("/")[-1]
-    import wandb
-    wandb.init(
-        project="ul2_pretrain",
-        name=model_name
-    )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.add_special_tokens({'bos_token': '<s>'})
+    tokenizer.add_special_tokens({'bos_token': '</s>'})
 
     # model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
     # model.resize_token_embeddings(len(tokenizer))
 
     config = MT5Config.from_pretrained(model_name)
     config.vocab_size = len(tokenizer)
-    config.dropout_rate = 0.1
+    config.dropout_rate = 0.0
+    config.num_decoder_layers = 40
+    print(config)
     model = MT5ForConditionalGeneration(config)
-
+    num_params = sum(param.numel() for param in model.parameters())
+    print(num_params/1e6)
     print(model.config)
     print(tokenizer.convert_tokens_to_ids)
     collate_fn = DataCollatorForUL2(tokenizer)
@@ -39,14 +37,14 @@ if __name__ == "__main__":
         # deepspeed="zero2_config.json",
         max_steps=100000,
         warmup_steps=4000,
-        learning_rate=1e-5,
+        learning_rate=1e-3,
         label_smoothing_factor=0,
-        optim="adamw_hf",
+        optim="adafactor",
         gradient_checkpointing=True,
-        dataloader_num_workers=9,
-        gradient_accumulation_steps=50,
-        per_device_train_batch_size=7,
-        per_device_eval_batch_size=5,
+        dataloader_num_workers=18,
+        gradient_accumulation_steps=45,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=15,
         weight_decay=0.01,
         max_grad_norm=2,
         logging_steps=10,
@@ -64,5 +62,10 @@ if __name__ == "__main__":
         eval_dataset=val_dataset,
         data_collator=collate_fn,
         tokenizer=tokenizer,
+    )
+    import wandb
+    wandb.init(
+        project="ul2_pretrain",
+        name=model_name
     )
     trainer.train()
