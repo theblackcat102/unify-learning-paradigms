@@ -33,6 +33,20 @@ This repo will just aim for accompolish this task instead, UL2 is way too compli
 > 50% PrefixLM, 25% Long (extreme) span corruption, and 25% regular span corruption to be quite simple and efficient
 
 
+## Experiments
+
+Run a mT5 encoder pretraining on 3090 on pythia json.zst files
+
+```
+python pretrain_example.py
+```
+
+<p align="center">
+  <img src="https://github.com/theblackcat102/theblackcat102.github.io/raw/master/images/ul2_loss_func.png" width="600">
+</p>
+
+training loss was stable and no weird spikes
+
 ## References
 
 Core Papers

@@ -20,9 +20,9 @@ if __name__ == "__main__":
     config = MT5Config.from_pretrained(model_name)
     config.vocab_size = len(tokenizer)
     config.dropout_rate = 0.0
-    config.num_decoder_layers = 40
     print(config)
     model = MT5ForConditionalGeneration(config)
+    # model = MT5ForConditionalGeneration.from_pretrained('theblackcat102/mt0-chat-large-ul2-2000')
     num_params = sum(param.numel() for param in model.parameters())
     print(num_params/1e6)
     print(model.config)
@@ -30,28 +30,27 @@ if __name__ == "__main__":
     collate_fn = DataCollatorForUL2(tokenizer)
     train_dataset = ZstDataset(list(glob.glob('/mnt/ssd/pythia/*.jsonl.zst')), tokenizer, max_length=600)
     val_dataset = ZstDataset('/mnt/ssd/pythia_val/val.jsonl.zst', tokenizer, max_length=600)
-
     args = Seq2SeqTrainingArguments(
         output_dir=f"{model_name}-ul2",
         fp16=True,
-        # deepspeed="zero2_config.json",
+        deepspeed="zero2_config.json",
         max_steps=100000,
         warmup_steps=4000,
-        learning_rate=1e-3,
+        learning_rate=5e-4,
         label_smoothing_factor=0,
-        optim="adafactor",
+        optim="adamw_hf",
         gradient_checkpointing=True,
-        dataloader_num_workers=18,
-        gradient_accumulation_steps=45,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=15,
+        dataloader_num_workers=22,
+        gradient_accumulation_steps=22,
+        per_device_train_batch_size=25,
+        per_device_eval_batch_size=8,
         weight_decay=0.01,
         max_grad_norm=2,
         logging_steps=10,
         save_total_limit=4,
         evaluation_strategy="steps",
         eval_steps=500,
-        save_steps=1000,
+        save_steps=500,
         report_to="wandb",
     )
 
