@@ -93,7 +93,8 @@ class DataCollatorForUL2(DataCollatorMixin):
             _sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
             _labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
             diff = max_length-_labels.shape[-1]
-            _labels = np.pad(_labels, [(0,0), (0, diff)], 'constant')
+            _labels = np.pad(_labels, [(0,0), (0, diff)], 'constant', 
+                             constant_values=self.label_pad_token_id)
             diff = max_length - _sub_input_ids.shape[-1]
             _sub_input_ids = np.pad(_sub_input_ids, [(0,0), (0, diff)], 'constant')
             new_batch['input_ids'][r_denoising_idx] = torch.from_numpy(_sub_input_ids).long()
@@ -111,7 +112,7 @@ class DataCollatorForUL2(DataCollatorMixin):
                 past_seq = input_id[split:]
                 if past_seq[-1] != self.tokenizer.eos_token_id:
                     past_seq[-1] = self.tokenizer.eos_token_id
-                _labels.append(F.pad(past_seq, (0, split), 'constant', self.pad_token_id))
+                _labels.append(F.pad(past_seq, (0, split), 'constant', self.label_pad_token_id))
 
             new_batch['input_ids'][s_denoising_idx] = torch.stack(_input_ids)
             new_batch['labels'][s_denoising_idx] = torch.stack(_labels)
@@ -136,7 +137,8 @@ class DataCollatorForUL2(DataCollatorMixin):
             _sub_input_ids = self.filter_input_ids(sub_input_ids, input_ids_sentinel)
             _labels = self.filter_input_ids(sub_input_ids, labels_sentinel)
             diff = max_length-_labels.shape[-1]
-            _labels = np.pad(_labels, [(0,0), (0, diff)], 'constant')
+            _labels = np.pad(_labels, [(0, 0), (0, diff)], 'constant',
+                             constant_values=self.label_pad_token_id)
             diff = max_length - _sub_input_ids.shape[-1]
             _sub_input_ids = np.pad(_sub_input_ids, [(0,0), (0, diff)], 'constant')
             new_batch['input_ids'][x_denoising_idx] = torch.from_numpy(_sub_input_ids).long()

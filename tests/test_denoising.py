@@ -25,8 +25,9 @@ if __name__ == "__main__":
     encode = collate_fn([ { 'input_ids': tokenizer(r)['input_ids'][:200] } for r in batch] )
     print(tokenizer.decode(tokenizer(batch[0])['input_ids']))
     print('-----')
-    for input_ids, token_ids in zip(encode['input_ids'], encode['decoder_input_ids']):
+    for input_ids, token_ids, label_ids in zip(encode['input_ids'], encode['decoder_input_ids'], encode['labels']):
         print('---------')
         print(tokenizer.decode(input_ids))
         print(tokenizer.decode(token_ids))
+        print(tokenizer.decode(label_ids[label_ids!= -100]))
         print('---------')
