@@ -10,7 +10,7 @@ from transformers.data.data_collator import (
     DataCollatorMixin,
     _torch_collate_batch,
 )
-from utils import random_spans_noise_mask
+from text_denoising.utils import random_spans_noise_mask
 
 
 @dataclass
@@ -43,6 +43,8 @@ class DataCollatorForUL2(DataCollatorMixin):
         self.task_prob = task_prob
         self.pad_token_id = self.tokenizer.pad_token_id
         self.decoder_start_token_id = self.tokenizer.bos_token_id
+        
+        assert sum(task_prob) == 1.0
 
     def assign_task_type(self, batch_size: int):
         '''
