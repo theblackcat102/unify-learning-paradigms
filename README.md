@@ -2,6 +2,10 @@
 
 Want to get better model with limited budgets? You are in the right place
 
+```
+pip install text-denoising
+```
+
 <p align="center">
   <img src="https://github.com/theblackcat102/unify-learning-paradigms/blob/master/ul2.png?raw=true" width="600">
 </p>
@@ -38,7 +42,8 @@ This repo will just aim for accompolish this task instead, UL2 is way too compli
 Run a mT5 encoder pretraining on 3090 on pythia json.zst files
 
 ```
-python pretrain_example.py
+pip install text-denoising
+python examples/pretrain_example.py
 ```
 
 <p align="center">
