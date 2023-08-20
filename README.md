@@ -1,9 +1,9 @@
-# Masking implementation for Unifying Language Learning Paradigms (UL2) - WIP
+# Masking implementation for Unifying Language Learning Paradigms (UL2)
 
 Want to get better model with limited budgets? You are in the right place
 
 <p align="center">
-  <img src="./ul2.png" width="600">
+  <img src="https://github.com/theblackcat102/unify-learning-paradigms/blob/master/ul2.png?raw=true" width="600">
 </p>
 
 - R-Denoiser (μ=3,r=0.15,n)∪ (μ=8,r=0.15,n)

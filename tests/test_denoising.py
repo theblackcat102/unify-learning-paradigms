@@ -1,5 +1,5 @@
 from transformers import AutoTokenizer
-from text_denoising.collate_fn import DataCollatorForUL2
+from text_denoising import DataCollatorForUL2
 
 
 
